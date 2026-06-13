@@ -1,0 +1,174 @@
+syntax = "proto3";
+
+package uniflow.rclone;
+
+// RcloneBridge is the gRPC service implemented by the embedded/standalone Rclone
+// Go process. It gives UniFlow (Rust) access to 70+ backends using Rclone's
+// battle-tested code without rewriting any of it (per Section 13).
+//
+// All paths are relative to the named remote (e.g. "s3:my-bucket/path").
+// Credentials are passed via ConfigureRemote (never logged).
+service RcloneBridge {
+  // Core copy/move. Rclone chooses the best method (including server-side when possible).
+  rpc Copy(CopyRequest) returns (TransferResponse);
+  rpc Move(MoveRequest) returns (TransferResponse);
+
+  // Explicit zero-bandwidth server-side operations (when provider supports it,
+  // e.g. S3 CopyObject, GCS rewrite, Azure Copy Blob, etc.).
+  rpc ServerSideCopy(ServerSideCopyRequest) returns (TransferResponse);
+  rpc ServerSideMove(ServerSideMoveRequest) returns (TransferResponse);
+
+  // Multipart upload support for large objects with size-based chunk tuning.
+  rpc StartMultipartUpload(MultipartStartRequest) returns (MultipartSession);
+  rpc UploadChunk(UploadChunkRequest) returns (UploadChunkResponse);
+  rpc CompleteMultipartUpload(CompleteMultipartRequest) returns (TransferResponse);
+  rpc AbortMultipartUpload(AbortMultipartRequest) returns (Empty);
+
+  // Resumable range download (used for Cloud → Local with checkpointing).
+  rpc DownloadRange(DownloadRangeRequest) returns (stream Chunk);
+
+  // Listing / metadata (useful for future features and verification).
+  rpc ListObjects(ListObjectsRequest) returns (ListObjectsResponse);
+  rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse);
+
+  // Configure a remote with credentials for the duration of a job or session.
+  // This is how unified credential management is bridged to Rclone.
+  rpc ConfigureRemote(ConfigureRemoteRequest) returns (ConfigureRemoteResponse);
+}
+
+// ================== Messages ==================
+
+message CopyRequest {
+  string src_remote = 1;   // e.g. "local" or "s3"
+  string src_path   = 2;
+  string dst_remote = 3;
+  string dst_path   = 4;
+  bool   create_dirs = 5;
+  // Additional rclone flags can be added here or via options map.
+}
+
+message MoveRequest {
+  string src_remote = 1;
+  string src_path   = 2;
+  string dst_remote = 3;
+  string dst_path   = 4;
+}
+
+message ServerSideCopyRequest {
+  string src_remote = 1;
+  string src_path   = 2;
+  string dst_remote = 3;
+  string dst_path   = 4;
+}
+
+message ServerSideMoveRequest {
+  string src_remote = 1;
+  string src_path   = 2;
+  string dst_remote = 3;
+  string dst_path   = 4;
+}
+
+message MultipartStartRequest {
+  string remote = 1;
+  string path = 2;
+  int64  size = 3;                    // total file size - used for chunk tuning
+  string content_type = 4;
+  map<string, string> metadata = 5;
+}
+
+message MultipartSession {
+  string upload_id = 1;
+  int32  recommended_part_size_mb = 2; // size-based tuning hint from Rclone/provider
+}
+
+message UploadChunkRequest {
+  string upload_id = 1;
+  int32  part_number = 2;
+  bytes  data = 3;
+  int64  offset = 4;                  // for resume / verification
+}
+
+message UploadChunkResponse {
+  string etag = 1;
+  int64  bytes_written = 2;
+}
+
+message CompleteMultipartRequest {
+  string upload_id = 1;
+  repeated string part_etags = 2;     // in order
+}
+
+message AbortMultipartRequest {
+  string upload_id = 1;
+}
+
+message DownloadRangeRequest {
+  string remote = 1;
+  string path = 2;
+  int64  start = 3;
+  int64  length = 4;                  // 0 = to end
+}
+
+message Chunk {
+  bytes  data = 1;
+  int64  offset = 2;
+}
+
+message ListObjectsRequest {
+  string remote = 1;
+  string path = 2;
+  bool   recursive = 3;
+  int32  max_keys = 4;
+}
+
+message ListObjectsResponse {
+  repeated ObjectInfo objects = 1;
+  string next_continuation_token = 2;
+}
+
+message ObjectInfo {
+  string path = 1;
+  int64  size = 2;
+  string mod_time = 3;                // RFC3339
+  string etag = 4;
+}
+
+message HeadObjectRequest {
+  string remote = 1;
+  string path = 2;
+}
+
+message HeadObjectResponse {
+  int64  size = 1;
+  string etag = 2;
+  string mod_time = 3;
+  string content_type = 4;
+}
+
+message Credential {
+  string provider = 1;                // "s3", "gcs", "azureblob", ...
+  map<string, string> config = 2;     // rclone-style keys (sensitive values)
+}
+
+message ConfigureRemoteRequest {
+  string name = 1;                    // remote name to configure (e.g. "src-s3")
+  Credential credential = 2;
+}
+
+message ConfigureRemoteResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message TransferResponse {
+  int64  bytes_transferred = 1;
+  string etag_or_hash = 2;
+  bool   server_side = 3;             // true if zero-bandwidth server-side copy/move was used
+  string provider = 4;                // the backend that performed the operation
+}
+
+message Empty {}
+
+message MultipartStartResponse {  // alias for clarity
+  MultipartSession session = 1;
+}

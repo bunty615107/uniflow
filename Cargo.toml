@@ -1,0 +1,75 @@
+[package]
+name = "uniflowd"
+version = "0.1.0"
+edition = "2021"
+description = "UniFlow Phase 0 core daemon - connection-agnostic job orchestration (tokio + rayon)"
+license = "MIT OR Apache-2.0"
+repository = "https://example.com/uniflow"
+keywords = ["mft", "file-transfer", "daemon", "p2p", "cloud"]
+categories = ["command-line-utilities", "network-programming"]
+
+[[bin]]
+name = "uniflowd"
+path = "src/main.rs"
+
+[lib]
+name = "uniflow"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1.38", features = ["full", "rt-multi-thread"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+rayon = "1.10"
+blake3 = { version = "1.5", features = ["rayon", "std"] }
+librsync-sys = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.8", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde", "clock"] }
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "ansi"] }
+async-trait = "0.1"
+tonic = "0.12"
+prost = "0.13"
+
+# Section 13 approved P2P crates (iroh brings quinn + NAT traversal + discovery)
+iroh = { version = "0.25", default-features = false, features = [
+    "discovery-local-network",  # LAN mDNS/UDP broadcast for air-gap
+    "discovery-pkarr-dht",      # for peer discovery
+] }
+quinn = "0.11"  # explicit for QUIC transport (used by iroh)
+
+# Module 05 Security (Section 13 approved) - PINNED + hardened (per subagent threat model + vuln reports)
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rustls-pemfile = "=2.2.0"   # pinned; unmaintained in loose "2" (RUSTSEC-2025-0134); migrate to rustls-pki-types long-term
+chacha20poly1305 = "0.10"
+aes-gcm = "=0.10.3"         # pinned for known issues
+zeroize = { version = "1", features = ["zeroize_derive"] }
+# rand for proper OsRng in encryption.rs (previously used undeclared rand::random)
+rand = { version = "0.8", features = ["std"] }
+# rand added (with note per task) for proper OsRng (cryptographically secure nonce) in encryption.rs.
+# (Module 05 security). Alternative lighter dep: rand_core = "0.6" (transitively available via aead).
+# Without this, rand::random or OsRng usage would fail to compile or fall back to insecure.
+rand = "0.8"
+
+# For web application binding the Stitch UIs to backend
+axum = { version = "0.7", features = ["macros", "json", "tokio"] }
+tower-http = { version = "0.5", features = ["fs", "cors", "set-header", "limit", "trace"] }
+# tower required for RateLimitLayer (and test ServiceExt); rate limiting + middleware composition
+tower = { version = "0.4", features = ["limit", "util"] }
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+# For unit tests of the full application (models, service, security, axum web handlers)
+# tower now provided by [dependencies] (with limit+util); keep only test-specific if needed
+http-body-util = "0.1"
+mime = "0.3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
