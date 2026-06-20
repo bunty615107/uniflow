@@ -1,7 +1,7 @@
 ---
 name: Feature Request
-about: Suggest an idea for UniFlow
-title: 'feat: '
+about: Suggest an idea or new feature for UniFlow.
+title: "[FEATURE] "
 labels: enhancement
 assignees: ''
 ---
