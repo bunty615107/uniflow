@@ -1,0 +1,59 @@
+name: Scheduled Release
+
+on:
+  schedule:
+    - cron: '0 9 1,15 * *'
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for new commits and tag release
+        run: |
+          # Get the latest tag, default to v0.0.0 if no tags exist
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+
+          if [ "$LATEST_TAG" = "v0.0.0" ]; then
+            COMMITS=$(git rev-list HEAD --count)
+          else
+            COMMITS=$(git rev-list ${LATEST_TAG}..HEAD --count)
+          fi
+
+          if [ "$COMMITS" -gt 0 ]; then
+            echo "Found $COMMITS new commit(s) since $LATEST_TAG. Creating new release."
+
+            # Remove 'v' prefix
+            VERSION=${LATEST_TAG#v}
+
+            # Split version
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+            # Fallbacks if read fails to parse something valid
+            MAJOR=${MAJOR:-0}
+            MINOR=${MINOR:-0}
+            PATCH=${PATCH:-0}
+
+            # Increment patch
+            NEW_PATCH=$((PATCH + 1))
+            NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+
+            echo "Next tag: $NEW_TAG"
+
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+
+            git tag $NEW_TAG
+            git push origin $NEW_TAG
+          else
+            echo "No new commits since $LATEST_TAG. Skipping release."
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
