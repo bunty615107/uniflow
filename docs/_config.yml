@@ -1,3 +1,4 @@
 title: UniFlow
-description: Connection-Agnostic Job Orchestration & Universal Transfer Bus
-theme: jekyll-theme-hacker
+description: Secure, connection-agnostic Managed File Transfer (MFT) orchestrated with Rust, Tokio, and Rayon.
+exclude:
+  - README.md
