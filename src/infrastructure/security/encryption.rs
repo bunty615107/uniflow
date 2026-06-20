@@ -3,7 +3,7 @@
 //! Streaming support for large files, deltas, and multipart chunks.
 
 use chacha20poly1305::{aead::{Aead, KeyInit}, ChaCha20Poly1305, Nonce};
-use aes_gcm::{Aes256Gcm, Key, aead::Aead as AesAead};
+use aes_gcm::{Aes256Gcm, Key};
 use zeroize::{Zeroize, Zeroizing};
 // Use rand's OsRng + RngCore for cryptographically secure nonce (fix for previous rand::random which was not OsRng + no dep).
 // See Cargo.toml: rand = "0.8" added with note. (aead::OsRng alias also works but we standardize on rand here for explicitness)
