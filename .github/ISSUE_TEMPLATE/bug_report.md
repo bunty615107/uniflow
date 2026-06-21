@@ -1,9 +1,10 @@
 ---
-name: Bug Report
-about: File a bug report to help us improve UniFlow.
+name: Bug report
+about: Create a report to help us improve
 title: "[BUG] "
 labels: bug
 assignees: ''
+
 ---
 
 **Describe the bug**
@@ -19,12 +20,10 @@ Steps to reproduce the behavior:
 **Expected behavior**
 A clear and concise description of what you expected to happen.
 
-**Logs / Error Messages**
-If applicable, add logs or error messages to help explain your problem. (Use triple backticks ``` to format as code).
-
-**Environment:**
- - OS: [e.g. Ubuntu 22.04, Windows 11, macOS 13]
- - UniFlow Version: [e.g. 0.1.0 or commit hash]
+**Environment (please complete the following information):**
+ - OS: [e.g. Ubuntu 22.04]
+ - Rust version: [e.g. 1.75.0]
+ - Version of uniflow: [e.g. 0.1.0]
 
 **Additional context**
-Add any other context about the problem here (e.g., specific transports, configuration, network setup).
+Add any other context about the problem here.
