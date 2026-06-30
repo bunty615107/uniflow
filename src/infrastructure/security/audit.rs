@@ -4,10 +4,11 @@
 
 use blake3::Hasher;
 use crate::error::{Result, UniFlowError};
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use std::sync::Mutex;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditEvent {
     pub job_id: String,
     pub event_type: String, // "submit", "execute_start", "checkpoint", "complete", "cancel", etc.
@@ -17,19 +18,76 @@ pub struct AuditEvent {
 }
 
 pub struct TamperEvidentAuditLogger {
-    hasher: Mutex<Hasher>,
     last_hash: Mutex<String>,
     events: Mutex<Vec<AuditEvent>>,
-    // In prod: persist to file/DB with the events.
+    /// When set, events are appended to this file as JSON lines for durability.
+    persist_path: Option<std::path::PathBuf>,
+}
+
+impl Default for TamperEvidentAuditLogger {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TamperEvidentAuditLogger {
     pub fn new() -> Self {
         Self {
-            hasher: Mutex::new(Hasher::new()),
             last_hash: Mutex::new("genesis".to_string()),
             events: Mutex::new(Vec::new()),
+            persist_path: None,
         }
+    }
+
+    /// Create a logger that persists events to an append-only file.
+    /// On construction, loads existing events from the file and verifies the chain.
+    pub fn with_file(path: std::path::PathBuf) -> Self {
+        let logger = Self {
+            last_hash: Mutex::new("genesis".to_string()),
+            events: Mutex::new(Vec::new()),
+            persist_path: Some(path.clone()),
+        };
+
+        // Load existing events from file if present.
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let mut loaded = Vec::new();
+                for line in content.lines() {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    match serde_json::from_str::<AuditEvent>(line) {
+                        Ok(event) => loaded.push(event),
+                        Err(e) => {
+                            warn!("skipping malformed audit log line: {e}");
+                        }
+                    }
+                }
+                if !loaded.is_empty() {
+                    // Replay the chain to recover the last hash.
+                    let mut prev = "genesis".to_string();
+                    for event in &loaded {
+                        let mut hasher = Hasher::new();
+                        hasher.update(prev.as_bytes());
+                        hasher.update(event.job_id.as_bytes());
+                        hasher.update(event.event_type.as_bytes());
+                        hasher.update(event.timestamp.as_bytes());
+                        hasher.update(event.details.as_bytes());
+                        prev = hasher.finalize().to_hex().to_string();
+                    }
+                    info!(events = loaded.len(), root = %prev, "loaded audit log from file");
+                    *logger.last_hash.lock().unwrap() = prev;
+                    *logger.events.lock().unwrap() = loaded;
+                }
+            }
+        }
+
+        // Verify the loaded chain (warns but continues on failure — defence in depth).
+        if let Err(e) = logger.verify_chain() {
+            warn!("audit chain verification failed on startup: {e} — continuing with caution");
+        }
+
+        logger
     }
 
     pub fn log(&self, event: AuditEvent) -> Result<String> {
@@ -63,13 +121,20 @@ impl TamperEvidentAuditLogger {
             "tamper_evident_audit"
         );
 
-        // In full impl: also write to append-only store with proof.
-        // Make persistence easier: (commented append-only file example -- enable by uncommenting for file-backed durability)
-        // Example (append-only, simple; real would include atomic write + fsync + hash proof):
-        //   if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("uniflow_audit.log") {
-        //       let _ = writeln!(f, "{}|{}|{}|{}|{}|{}", event.job_id, event.event_type, event.timestamp, event.details, event.prev_hash, new_hash);
-        //       // Consider: use serde_json + line delimited for easy replay; rotate by size/date.
-        //   }
+        // Persist to append-only file if configured.
+        if let Some(path) = &self.persist_path {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                if let Ok(json) = serde_json::to_string(&event) {
+                    let _ = writeln!(f, "{json}");
+                    let _ = f.flush();
+                }
+            }
+        }
         Ok(new_hash)
     }
 
@@ -84,8 +149,10 @@ impl TamperEvidentAuditLogger {
 
     /// Basic verify_chain: replay from genesis verifying the tamper-evident hash links.
     /// Recomputes each successive root using fresh BLAKE3(prev || event_fields) and checks:
-    ///   - each event's recorded prev_hash matches the expected from prior step
-    ///   - final computed root matches the logger's current_root()
+    ///
+    /// - each event's recorded prev_hash matches the expected from prior step
+    /// - final computed root matches the logger's current_root()
+    ///
     /// Returns Ok(()) on clean chain (from initial "genesis"), or Err on first mismatch (indicates tamper or bug).
     /// This can be called periodically or on shutdown/UI for compliance. Does not mutate state.
     /// Pairs well with the commented append-only file persistence above (external tools can replay the log file too).

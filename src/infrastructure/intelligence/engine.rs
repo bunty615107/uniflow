@@ -3,17 +3,22 @@
 //! Runs the full pipeline (probes + hardware + optimizer) and mutates the Job
 //! with profiling + tuning. All steps produce explainable logs.
 
-use crate::application::ports::{IntelligenceEngine, NetworkProbe, Optimizer};
+use crate::application::ports::{IntelligenceEngine, NetworkProbe, Optimizer, Planner, SystemProfiler};
 use crate::domain::{Job, ProfilingResult};
 use crate::error::Result;
-use crate::infrastructure::intelligence::{CustomNetworkProbe, DefaultOptimizer, HardwareRegistry};
+use crate::infrastructure::intelligence::{
+    CostModelPlanner, CustomNetworkProbe, DefaultOptimizer, DefaultSystemProfiler, HardwareRegistry,
+};
 use chrono::Utc;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct DefaultIntelligenceEngine {
     network_probe: Box<dyn NetworkProbe>,
     optimizer: Box<dyn Optimizer>,
     hardware_registry: HardwareRegistry,
+    /// Deliverable 1: the real profiler + cost-model planner. Populates `job.plan`.
+    profiler: DefaultSystemProfiler,
+    planner: CostModelPlanner,
 }
 
 impl DefaultIntelligenceEngine {
@@ -22,7 +27,15 @@ impl DefaultIntelligenceEngine {
             network_probe: Box::new(CustomNetworkProbe::new()),
             optimizer: Box::new(DefaultOptimizer::new()),
             hardware_registry: HardwareRegistry::default(),
+            profiler: DefaultSystemProfiler::new(),
+            planner: CostModelPlanner::new(),
         }
+    }
+}
+
+impl Default for DefaultIntelligenceEngine {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -60,7 +73,17 @@ impl IntelligenceEngine for DefaultIntelligenceEngine {
             job.label = Some(summary);
         }
 
-        // In a fuller system we would also set job.tuning = Some(decision) after extending the model.
+        // Deliverable 1: run the real profiler + cost-model planner and attach the
+        // resulting TransferPlan to the job (auditable, consumed by the parallel core).
+        match self.profiler.profile_pair(job.source.inner(), job.destination.inner()) {
+            Ok(pair) => {
+                let plan = self.planner.plan(job, &pair);
+                info!(job_id = %job.id, plan = %plan.explanation, "transfer plan attached to job");
+                job.plan = Some(plan);
+            }
+            Err(e) => warn!(job_id = %job.id, error = %e, "profiling failed; parallel core will self-profile"),
+        }
+
         info!(job_id = %job.id, explanation = %decision.explanation, "intelligence tuning complete and applied to job");
 
         Ok(result)

@@ -3,7 +3,7 @@
 //! Demonstrates the contract (tracing, checkpoints, rayon usage) without
 //! performing real I/O. This is the "connection-agnostic" placeholder.
 
-use crate::application::ports::{ProbeResult, TransferReport, Transport};
+use crate::application::ports::{ProbeResult, TransferReport, Transport, TransportSelector};
 use crate::domain::Job;
 use crate::error::Result;
 use async_trait::async_trait;
@@ -40,8 +40,8 @@ impl Transport for NoopTransport {
         // Demonstrate rayon (CPU-bound parallel work) inside the async execution path.
         // Real transports will use this for hashing, delta computation, chunking, etc.
         let parallel_sum: u64 = rayon::join(
-            || (0u64..5_000).into_par_iter().map(|x| x * 3 + 1).sum(),
-            || (10_000u64..15_000).into_par_iter().map(|x| x / 2).sum(),
+            || (0u64..5_000).into_par_iter().map(|x| x * 3 + 1).sum::<u64>(),
+            || (10_000u64..15_000).into_par_iter().map(|x| x / 2).sum::<u64>(),
         )
         .0 + (15_000u64..20_000).into_par_iter().map(|x| x % 7).sum::<u64>();
 
@@ -71,11 +71,18 @@ impl Transport for NoopTransport {
     }
 
     async fn probe(&self, _source: &crate::domain::Endpoint, _dest: &crate::domain::Endpoint) -> Option<ProbeResult> {
-        // In P0 we always "succeed" with the noop.
         Some(ProbeResult {
             reachable: true,
-            rtt_ms: Some(5),
+            rtt_ms: Some(2),
             bandwidth_mbps: Some(1000),
         })
+    }
+}
+
+pub struct NoopSelector;
+
+impl TransportSelector for NoopSelector {
+    fn select(&self, _job: &mut Job) -> std::sync::Arc<dyn Transport> {
+        std::sync::Arc::new(NoopTransport)
     }
 }

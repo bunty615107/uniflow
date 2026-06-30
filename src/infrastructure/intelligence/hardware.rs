@@ -72,19 +72,39 @@ impl HardwareDetector for BasicSystemDetector {
     fn name(&self) -> &'static str { "basic_system" }
 
     fn detect(&self) -> Option<HardwareProfile> {
-        // Very basic — in production use num_cpus + sysinfo or similar (lightweight).
         let cores = std::thread::available_parallelism().map(|p| p.get() as u32).unwrap_or(4);
+
+        // Real CPU feature detection via std::arch (no hard-coded assumptions).
+        let mut features = Vec::new();
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::is_x86_feature_detected!("avx512f") { features.push("avx512f".to_string()); }
+            if std::is_x86_feature_detected!("avx2") { features.push("avx2".to_string()); }
+            if std::is_x86_feature_detected!("sse4.2") { features.push("sse4.2".to_string()); }
+            if std::is_x86_feature_detected!("aes") { features.push("aes".to_string()); }
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") { features.push("neon".to_string()); }
+            if std::arch::is_aarch64_feature_detected!("aes") { features.push("aes".to_string()); }
+        }
+
+        // Real total RAM via sysinfo (0.30 reports bytes), replacing the former 8.0 placeholder.
+        let mut sys = sysinfo::System::new();
+        sys.refresh_memory();
+        let ram_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
+
         Some(HardwareProfile {
             cpu_cores: cores,
-            cpu_features: vec!["avx2".to_string()], // assume common
-            ram_gb: 8.0, // placeholder
-            disk_iops: Some(1000),
+            cpu_features: features,
+            ram_gb,
+            disk_iops: None, // unknown without a benchmark; the cost-model profiler measures storage class
             accelerators: vec![],
         })
     }
 
     fn explain(&self) -> String {
-        "Basic std-based detection of cores and assumed features. Extend with sysinfo for accurate RAM/disk.".to_string()
+        "std::arch CPU feature detection + sysinfo total RAM (no hard-coded values).".to_string()
     }
 }
 

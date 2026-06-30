@@ -4,9 +4,16 @@
 //! These are the core "Source + Destination + Mode" concepts from the blueprint (Sec 3).
 
 pub mod models;
+pub mod plan;
+pub mod profile;
 
 pub use models::{
     BlockSignature, DeltaChunk, DeltaInstruction, Destination, Endpoint, FileManifest, FileSignature,
     Filters, HardwareProfile, Job, JobId, JobStatus, MultiPathPlan, NetworkProbeResult, P2PDiscoveryInfo,
     PathInfo, PeerId, Policy, ProfilingResult, ResumeState, Schedule, Source, TransferMode, TuningDecision,
+};
+pub use plan::{CompressionCodec, EncryptionCodec, TransferPlan, TransportHint};
+pub use profile::{
+    AsyncIoBackend, CpuInfo, EndpointProfile, GpuInfo, LinkProfile, MemoryInfo, NetworkClass,
+    OsFsInfo, PairProfile, SimdLevel, StorageClass, StorageInfo,
 };

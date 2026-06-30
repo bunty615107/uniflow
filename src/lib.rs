@@ -8,6 +8,7 @@
 //! The engine is connection-agnostic: jobs are Source + Destination + Mode.
 
 pub mod application;
+pub mod config;
 pub mod daemon;
 pub mod domain;
 pub mod error;
@@ -18,33 +19,46 @@ pub mod web;
 // Re-export the primary public API for convenience (the "clean" surface).
 pub use application::{
     ports::{
-        CloudCredential, ContentHasher, CredentialVault, DeltaEngine, HardwareDetector, IntelligenceEngine,
-        JobRepository, NatTraversal, NetworkProbe, Optimizer, PeerDiscovery, SignatureGenerator, Transport,
-        TransferReport,
+        CloudCredential, ComputeOffload, ContentHasher, CredentialVault, DeltaEngine, HardwareDetector,
+        IntelligenceEngine, JobRepository, NatTraversal, NetworkProbe, Optimizer, PeerDiscovery, Planner,
+        SignatureGenerator, SystemProfiler, Transport, TransferReport,
     },
     services::JobService,
 };
 pub use daemon::Daemon;
 pub use domain::{
-    BlockSignature, DeltaChunk, DeltaInstruction, Destination, Endpoint, FileManifest, FileSignature,
-    Filters, HardwareProfile, Job, JobId, JobStatus, MultiPathPlan, NetworkProbeResult, P2PDiscoveryInfo,
-    PathInfo, PeerId, Policy, ProfilingResult, ResumeState, Schedule, Source, TransferMode, TuningDecision,
+    AsyncIoBackend, BlockSignature, CompressionCodec, CpuInfo, DeltaChunk, DeltaInstruction, Destination,
+    Endpoint, EncryptionCodec, EndpointProfile, FileManifest, FileSignature, Filters, GpuInfo,
+    HardwareProfile, Job, JobId, JobStatus, LinkProfile, MemoryInfo, MultiPathPlan, NetworkClass,
+    NetworkProbeResult, OsFsInfo, P2PDiscoveryInfo, PairProfile, PathInfo, PeerId, Policy, ProfilingResult,
+    ResumeState, Schedule, SimdLevel, Source, StorageClass, StorageInfo, TransferMode, TransferPlan,
+    TransportHint, TuningDecision,
 };
 pub use error::{Result, UniFlowError};
 pub use infrastructure::{
-    AuditEvent, ClientSideEncryption, DefaultIntelligenceEngine, EnvCredentialVault, InMemoryJobRepository, IrohP2PTransport,
-    LocalDeltaTransport, MfaHook, MobileP2PBackground, NoopTransport, ParallelBlake3Hasher, RbacEnforcer,
-    RcloneBridgeClient, RcloneCloudTransport, RustlsConfig, TamperEvidentAuditLogger, TransportRouter,
+    AuditEvent, ClientSideEncryption, CostModelPlanner, CpuOffload, DefaultIntelligenceEngine,
+    DefaultSystemProfiler, EnvCredentialVault, InMemoryJobRepository, IrohP2PTransport, LocalDeltaTransport,
+    MfaHook, MobileP2PBackground, NoopTransport, ParallelBlake3Hasher, ParallelTransport, RbacEnforcer,
+    RcloneBridgeClient, RcloneCloudTransport, RustlsConfig, SledJobRepository, TamperEvidentAuditLogger,
+    TransportRouter,
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::ports::Transport;
     use crate::domain::{Endpoint, Job, JobStatus, Policy, Source, Destination, TransferMode};
-    use crate::infrastructure::{AuditEvent, ClientSideEncryption, NoopTransport, TamperEvidentAuditLogger};
+    use crate::infrastructure::{AuditEvent, ClientSideEncryption, NoopSelector, TamperEvidentAuditLogger, EnvCredentialVault};
+    use crate::config::UniFlowConfig;
     use std::sync::Arc;
     use tokio::runtime::Runtime;
+
+    /// Construct a test-friendly config (demo mode, in-memory persistence).
+    fn test_config() -> UniFlowConfig {
+        // Force demo mode so Daemon doesn't require a real API key.
+        std::env::set_var("UNIFLOW_DEMO_MODE", "true");
+        std::env::remove_var("UNIFLOW_SLED_PATH");
+        UniFlowConfig::from_env().expect("test config")
+    }
 
     // === Domain model tests ===
     #[test]
@@ -53,7 +67,7 @@ mod tests {
             Source::from(Endpoint::Local { path: "/tmp/src".into() }),
             Destination::from(Endpoint::Local { path: "/tmp/dst".into() }),
             TransferMode::Copy,
-        ).with_label("unit-test-job".into());
+        ).with_label("unit-test-job");
 
         assert_eq!(job.label.as_deref(), Some("unit-test-job"));
         assert_eq!(job.status, JobStatus::Pending);
@@ -73,11 +87,13 @@ mod tests {
 
     #[test]
     fn policy_security_fields_roundtrip() {
-        let mut p = Policy::default();
-        p.zero_knowledge = true;
-        p.rbac_role = Some("auditor".into());
-        p.mfa_required = true;
-        p.encrypt_in_transit = true;
+        let p = Policy {
+            zero_knowledge: true,
+            rbac_role: Some("auditor".into()),
+            mfa_required: true,
+            encrypt_in_transit: true,
+            ..Default::default()
+        };
         let j = Job::new(
             Source::from(Endpoint::Local { path: "a".into() }),
             Destination::from(Endpoint::Local { path: "b".into() }),
@@ -128,14 +144,21 @@ mod tests {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let repo: Arc<dyn crate::application::ports::JobRepository> = Arc::new(InMemoryJobRepository::new());
-            let transport: Arc<dyn Transport> = Arc::new(NoopTransport);
-            let svc = JobService::new(repo.clone(), transport).await.unwrap();
+            let selector = Arc::new(NoopSelector);
+            let vault: Arc<dyn crate::application::ports::CredentialVault> = Arc::new(EnvCredentialVault::new());
+            let svc = JobService::new(repo.clone(), selector, vault).await.unwrap();
 
+            // Admin role: default policy is "sensitive" (encrypt_in_transit) and RBAC
+            // denies operator on sensitive ops, so the lifecycle happy-path needs admin.
+            let admin = Policy {
+                rbac_role: Some("admin".into()),
+                ..Default::default()
+            };
             let job = Job::new(
                 Source::from(Endpoint::Local { path: "/s".into() }),
                 Destination::from(Endpoint::Local { path: "/d".into() }),
                 TransferMode::Copy,
-            ).with_label("svc-test".into());
+            ).with_label("svc-test").with_policy(admin);
 
             let id = svc.submit(job).await.unwrap();
             // give worker a moment
@@ -162,13 +185,14 @@ mod tests {
     #[tokio::test]
     async fn web_router_builds_and_api_endpoints_respond() {
         // Construct a minimal daemon for the state (re-uses the same wiring as prod main)
-        let daemon = Arc::new(Daemon::new().await.expect("daemon for test"));
-        let app = crate::web::build_app(daemon.clone());
+        let config = Arc::new(test_config());
+        let daemon = Arc::new(Daemon::new(&config).await.expect("daemon for test"));
+        let app = crate::web::build_app(daemon.clone(), config.clone());
 
         // Use tower to call without a real listener
         use tower::ServiceExt; // oneshot
         use axum::body::Body;
-        use http::{Request, StatusCode};
+        use axum::http::{Request, StatusCode};
 
         // GET /
         let resp = app.clone().oneshot(Request::builder().uri("/").body(Body::empty()).unwrap()).await.unwrap();
@@ -234,14 +258,80 @@ mod tests {
     fn daemon_exposes_audit_and_jobs_api_surface() {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let d = Daemon::new().await.unwrap();
+            let config = test_config();
+            let d = Daemon::new(&config).await.unwrap();
             // list works (empty or seeded by construction)
-            let js = d.list_jobs().await.unwrap();
+            let _js = d.list_jobs().await.unwrap();
             let _aud = d.list_audit_events();
-            // submit a simple one
-            let j = Job::new(Source::from(Endpoint::Local{path:"/t/src".into()}), Destination::from(Endpoint::Local{path:"/t/dst".into()}), TransferMode::Copy);
+            // submit a simple one. Default policy is "sensitive" (encrypt_in_transit),
+            // so it needs an admin role to pass RBAC (operator is denied sensitive ops).
+            let admin = Policy {
+                rbac_role: Some("admin".into()),
+                ..Default::default()
+            };
+            let j = Job::new(Source::from(Endpoint::Local{path:"/t/src".into()}), Destination::from(Endpoint::Local{path:"/t/dst".into()}), TransferMode::Copy).with_policy(admin);
             let _id = d.submit_job(j).await.unwrap();
             let _ = d.shutdown().await;
+        });
+    }
+
+    #[test]
+    fn transport_router_selects_expected_transport_and_attaches_plan() {
+        use crate::application::ports::TransportSelector;
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let local_transport = Arc::new(LocalDeltaTransport::new());
+            let parallel_transport = Arc::new(ParallelTransport::new());
+            let cloud_transport = Arc::new(NoopTransport);
+
+            let intel: Arc<dyn crate::application::ports::IntelligenceEngine> =
+                Arc::new(DefaultIntelligenceEngine::new());
+
+            let router = TransportRouter::with_parallel(
+                local_transport.clone(),
+                parallel_transport.clone(),
+                cloud_transport.clone(),
+                None, // no p2p for this test
+                Some(intel.clone()),
+                true, // use_parallel_local
+            );
+
+            // 1. Local job -> routes to parallel-core because use_parallel_local is true
+            let mut local_job = Job::new(
+                Source::from(Endpoint::Local { path: "/tmp/src".into() }),
+                Destination::from(Endpoint::Local { path: "/tmp/dst".into() }),
+                TransferMode::Copy,
+            );
+            let t_local = router.select(&mut local_job);
+            assert_eq!(t_local.name(), "parallel-core");
+            assert!(local_job.plan.is_some());
+
+            // 2. Cloud job -> routes to rclone-cloud (noop here)
+            let mut cloud_job = Job::new(
+                Source::from(Endpoint::Cloud {
+                    provider: "s3".into(),
+                    bucket: "bucket".into(),
+                    prefix: Some("src".into()),
+                }),
+                Destination::from(Endpoint::Local { path: "/tmp/dst".into() }),
+                TransferMode::Copy,
+            );
+            let t_cloud = router.select(&mut cloud_job);
+            assert_eq!(t_cloud.name(), "noop");
+            assert!(cloud_job.plan.is_some());
+
+            // 3. Device job -> normally routes to p2p-iroh, but since p2p is None,
+            // it falls back to local/parallel.
+            let mut device_job = Job::new(
+                Source::from(Endpoint::Device {
+                    device_id: "device123".into(),
+                    path: "/tmp/src".into(),
+                }),
+                Destination::from(Endpoint::Local { path: "/tmp/dst".into() }),
+                TransferMode::Copy,
+            );
+            let t_device = router.select(&mut device_job);
+            assert_eq!(t_device.name(), "parallel-core");
         });
     }
 }

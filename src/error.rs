@@ -27,6 +27,18 @@ pub enum UniFlowError {
     #[error("configuration error: {0}")]
     Config(String),
 
+    #[error("security policy violation: {0}")]
+    Security(String),
+
+    #[error("authentication failed: {0}")]
+    Authentication(String),
+
+    #[error("insufficient privileges: {0}")]
+    NotAuthorized(String),
+
+    #[error("rate limit exceeded")]
+    RateLimit,
+
     #[error("internal: {0}")]
     Internal(String),
 }

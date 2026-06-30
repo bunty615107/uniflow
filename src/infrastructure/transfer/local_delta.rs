@@ -2,13 +2,13 @@
 //!
 //! Implements the `Transport` port for Local ↔ Local and Server ↔ Server (path-based on-prem).
 //! Uses:
-//! - librsync-sys for block-level delta (weak rolling + strong)
+//! - a pure-Rust rsync-style block-level delta (rolling weak checksum + strong BLAKE3)
 //! - blake3 (rayon + SIMD) for parallel integrity + dedup
 //! - rayon work-stealing for parallel chunk processing
 //! - Byte-level resume via Job.checkpoint / ResumeState
 
 use crate::application::ports::{ContentHasher, DeltaEngine, TransferReport, Transport};
-use crate::domain::{Destination, Endpoint, FileSignature, Job, ResumeState, Source};
+use crate::domain::{Endpoint, FileSignature, Job, ResumeState};
 use crate::error::Result;
 use crate::infrastructure::delta::blake3_hasher::ParallelBlake3Hasher;
 use crate::infrastructure::delta::librsync;
@@ -25,9 +25,9 @@ pub struct LocalDeltaTransport {
 impl LocalDeltaTransport {
     pub fn new() -> Self {
         let hasher: Arc<dyn ContentHasher> = Arc::new(ParallelBlake3Hasher::new());
-        // For Phase 1 we use the (stub) librsync implementation.
-        // In a full build you would provide a real one that calls the C API.
-        let engine: Arc<dyn DeltaEngine> = Arc::new(LibrsyncDeltaEngine);
+        // Real pure-Rust rsync-style delta engine (rolling weak + strong BLAKE3);
+        // no C `librsync` dependency. See `delta::librsync` for the algorithm.
+        let engine: Arc<dyn DeltaEngine> = Arc::new(RsyncDeltaEngine);
 
         Self { hasher, engine }
     }
@@ -59,6 +59,7 @@ impl LocalDeltaTransport {
     /// - Rejects any path that would escape the base (prevents arbitrary FS access via job endpoints).
     /// - For non-existing destinations (common), validates via parent dir canonicalize + prefix check.
     /// - Similar enforcement for Remote (file: URIs and drive absolutes).
+    ///
     /// Returns Some(safe_path) or None (rejected; caller turns into Config error).
     fn enforce_sandbox(raw: &Path) -> Option<PathBuf> {
         let sandbox_base = std::env::temp_dir().join("uniflow_sandbox");
@@ -153,7 +154,7 @@ impl Transport for LocalDeltaTransport {
             .unwrap_or_default();
 
         // 2. Parallel BLAKE3 fingerprint of source (for verification + future dedup)
-        let source_manifest = self.hasher.hash_blocks_parallel(&src_path, 4096)?;
+        let _source_manifest = self.hasher.hash_blocks_parallel(&src_path, 4096)?;
 
         // 3. Generate signature of current destination (for delta)
         let dest_sig = if dst_path.exists() {
@@ -162,17 +163,18 @@ impl Transport for LocalDeltaTransport {
             FileSignature { block_size: 4096, blocks: vec![], total_size: 0 }
         };
 
-        // 4. Create delta (librsync)
+        // 4. Create delta: only changed blocks become Literal; matched blocks are Copy.
         let delta = self.engine.create_delta(&src_path, &dest_sig)?;
 
-        // 5. Apply delta with resume support + parallel chunk processing (rayon inside the engine)
+        // 5. Apply delta with resume support; reconstructs from basis + delta and
+        //    publishes the destination atomically (temp + fsync + rename).
         let bytes_written = self.engine.apply_delta(&dst_path, &delta, resume.bytes_transferred)?;
 
         // 6. Final integrity (BLAKE3)
         let final_hash = if job.policy.verify_integrity {
             let h = self.hasher.hash_file_parallel(&dst_path)?;
             info!(job_id = %job.id, "BLAKE3 integrity verification passed");
-            Some(hex::encode(h)) // requires hex crate or format manually; for demo we use a stub
+            Some(hex::encode(h)) // real lowercase-hex of the 32-byte BLAKE3 root (see hex mod below)
         } else {
             None
         };
@@ -195,10 +197,10 @@ impl Transport for LocalDeltaTransport {
     }
 }
 
-/// Concrete DeltaEngine adapter that delegates to our librsync wrapper.
-struct LibrsyncDeltaEngine;
+/// Concrete DeltaEngine adapter delegating to the pure-Rust rsync-style engine.
+struct RsyncDeltaEngine;
 
-impl DeltaEngine for LibrsyncDeltaEngine {
+impl DeltaEngine for RsyncDeltaEngine {
     fn create_delta(&self, source: &std::path::Path, sig: &crate::domain::FileSignature) -> Result<Vec<crate::domain::DeltaChunk>> {
         librsync::create_delta_librsync(source, sig)
     }

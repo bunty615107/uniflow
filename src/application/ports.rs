@@ -3,10 +3,9 @@
 //! These are the contracts that the connection-agnostic engine depends on.
 //! Concrete implementations live in `infrastructure`.
 
-use crate::domain::{FileManifest, FileSignature, Job, JobId};
+use crate::domain::{DeltaChunk, FileManifest, FileSignature, Job, JobId};
 use crate::error::Result;
 use async_trait::async_trait;
-use std::sync::Arc;
 
 /// Repository port for job persistence (P0: in-memory + snapshot; later RocksDB).
 #[async_trait]
@@ -38,6 +37,13 @@ pub trait Transport: Send + Sync {
     }
 }
 
+/// A port for dynamic transport selection and routing.
+pub trait TransportSelector: Send + Sync {
+    /// Routes the job, potentially profiling and tuning it (which is why it needs `&mut Job`),
+    /// and returns the concrete `Transport` that should execute it.
+    fn select(&self, job: &mut Job) -> std::sync::Arc<dyn Transport>;
+}
+
 #[derive(Clone, Debug)]
 pub struct TransferReport {
     pub bytes_transferred: u64,
@@ -53,8 +59,8 @@ pub struct ProbeResult {
     pub bandwidth_mbps: Option<u32>,
 }
 
-/// === Phase 1 Delta Engine Ports (Section 13 / Module 02) ===
-
+// === Phase 1 Delta Engine Ports (Section 13 / Module 02) ===
+///
 /// Generates block-level signatures for delta computation (librsync weak + strong).
 pub trait SignatureGenerator: Send + Sync {
     fn generate_signature(&self, path: &std::path::Path) -> Result<FileSignature>;
@@ -105,10 +111,10 @@ pub trait CredentialVault: Send + Sync {
     }
 }
 
-/// === Module 03: Adaptive P2P Network Ports (Section 13) ===
-/// These are optional / advanced ports. The core Transport trait remains the
-/// primary way to execute P2P jobs. This separation keeps the engine clean.
-
+// === Module 03: Adaptive P2P Network Ports (Section 13) ===
+// These are optional / advanced ports. The core Transport trait remains the
+// primary way to execute P2P jobs. This separation keeps the engine clean.
+///
 /// Peer discovery abstraction (LAN mDNS, DHT, etc.).
 pub trait PeerDiscovery: Send + Sync {
     /// Discover nearby or known peers.
@@ -125,41 +131,11 @@ pub trait NatTraversal: Send + Sync {
 /// Pluggable profiling and auto-tuning layer.
 /// All detectors/probes/optimizers are traits for easy extension.
 /// Every decision produces an `explanation` string that is logged and persisted.
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct NetworkProbeResult {
-    pub rtt_ms: f64,
-    pub bandwidth_mbps: f64,
-    pub jitter_ms: f64,
-    pub explanation: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct HardwareProfile {
-    pub cpu_cores: u32,
-    pub cpu_features: Vec<String>, // e.g. "avx2", "qat", "cuda", "apple_silicon"
-    pub ram_gb: f64,
-    pub disk_iops: Option<u32>,
-    pub accelerators: Vec<String>, // "intel_qat", "nvidia_cuda", "apple_unified"
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TuningDecision {
-    pub threads: usize,
-    pub chunk_size: u64,
-    pub compression_level: Option<u8>,
-    pub max_bps: Option<u64>,           // adaptive throttle
-    pub start_at: Option<chrono::DateTime<chrono::Utc>>, // off-peak scheduling
-    pub explanation: String,            // **required** for auditability
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ProfilingResult {
-    pub network: Option<NetworkProbeResult>,
-    pub hardware: HardwareProfile,
-    pub decision: TuningDecision,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-}
+///
+/// These value types live in `domain` (pure/serializable). They were previously
+/// duplicated here, which made the port types incompatible with the domain types
+/// the engines actually produce. Re-export the single source of truth instead.
+pub use crate::domain::{HardwareProfile, NetworkProbeResult, ProfilingResult, TuningDecision};
 
 /// Pre-transfer network probe (RTT, bandwidth, jitter).
 pub trait NetworkProbe: Send + Sync {
@@ -181,4 +157,41 @@ pub trait Optimizer: Send + Sync {
 /// Orchestrator for the full intelligence pipeline.
 pub trait IntelligenceEngine: Send + Sync {
     fn profile_and_tune(&self, job: &mut Job) -> Result<ProfilingResult>;
+}
+
+// === Deliverable 1: Profiler & Planner (profile-first engine) ===
+use crate::domain::{Endpoint, EndpointProfile, LinkProfile, PairProfile, TransferPlan};
+
+/// Measures and caches the infrastructure profile for an endpoint pair.
+///
+/// Implementations detect real hardware / network / OS-FS facts and cache them
+/// per endpoint pair so repeated jobs over the same route don't re-probe.
+pub trait SystemProfiler: Send + Sync {
+    /// Profile a single endpoint's host (CPU/RAM/storage/GPU/OS-FS).
+    fn profile_endpoint(&self, endpoint: &Endpoint) -> Result<EndpointProfile>;
+
+    /// Measure the link between two endpoints (RTT/jitter/loss/throughput/path class).
+    fn profile_link(&self, source: &Endpoint, dest: &Endpoint) -> Result<LinkProfile>;
+
+    /// Full per-pair profile, served from cache when fresh.
+    fn profile_pair(&self, source: &Endpoint, dest: &Endpoint) -> Result<PairProfile>;
+}
+
+/// Turns a `PairProfile` into a concrete, explainable `TransferPlan` via a
+/// documented cost model (no magic constants without rationale).
+pub trait Planner: Send + Sync {
+    fn plan(&self, job: &Job, profile: &PairProfile) -> TransferPlan;
+}
+
+/// Pluggable compute backend for the hot per-chunk work (hashing / compression).
+///
+/// There is ALWAYS a CPU implementation; GPU implementations are feature-gated and
+/// optional. The engine only routes work here when the planner deems it profitable,
+/// and any failure falls back to CPU — satisfying graceful degradation.
+pub trait ComputeOffload: Send + Sync {
+    fn name(&self) -> &'static str;
+    /// True if this backend can actually run right now (device present, driver ok).
+    fn is_available(&self) -> bool;
+    /// BLAKE3 hash of a buffer (must be byte-identical to the CPU path).
+    fn hash(&self, data: &[u8]) -> [u8; 32];
 }

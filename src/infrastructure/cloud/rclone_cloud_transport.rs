@@ -8,9 +8,10 @@
 //! - Credential injection via CredentialVault
 
 use crate::application::ports::{CloudCredential, CredentialVault, TransferReport, Transport};
-use crate::domain::{Destination, Endpoint, Job, Source};
+use crate::domain::{Endpoint, Job};
 use crate::error::{Result, UniFlowError};
 use crate::infrastructure::cloud::RcloneBridgeClient;
+use crate::infrastructure::transfer::paths::resolve_sandboxed;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
@@ -51,6 +52,19 @@ impl RcloneCloudTransport {
             None
         }
     }
+
+    /// Map a Local/Remote endpoint to the bare OS path rclone's implicit local backend
+    /// understands. The path goes through the same sandbox check as the local engines,
+    /// so a cloud job cannot be used to read/write arbitrary filesystem locations.
+    fn local_path_string(endpoint: &Endpoint) -> Result<String> {
+        resolve_sandboxed(endpoint)
+            .map(|p| p.to_string_lossy().into_owned())
+            .ok_or_else(|| {
+                UniFlowError::Config(
+                    "local side of a cloud transfer must be a sandboxed path (rejected)".into(),
+                )
+            })
+    }
 }
 
 #[async_trait]
@@ -73,56 +87,64 @@ impl Transport for RcloneCloudTransport {
             "rclone-cloud transfer started"
         );
 
-        // Resolve credentials
-        let cred_ref = job.credentials_ref.as_deref().unwrap_or("default");
-        let cred: CloudCredential = self.vault.resolve(cred_ref)?;
+        // This transport only applies when at least one side is cloud; otherwise the
+        // router should have selected the local/parallel engine. Fail loudly rather
+        // than silently doing nothing.
+        if src_info.is_none() && dst_info.is_none() {
+            return Err(UniFlowError::Config(
+                "rclone-cloud transport requires at least one Cloud endpoint".into(),
+            ));
+        }
 
         let mut client = self.client.lock().await;
 
-        // Configure remote(s) on the Go side
-        // We use simple names derived from the job for isolation.
+        // Per-job remote names keep concurrent jobs isolated on the bridge side.
         let src_remote_name = format!("src-{}", job.id);
         let dst_remote_name = format!("dst-{}", job.id);
 
-        // For Local endpoints we let Rclone use its "local" remote.
-        // For Cloud we configure using the vault credential.
+        // Credentials are resolved only when a cloud side actually needs them, and only
+        // the cloud side(s) get a configured remote. Local sides use rclone's implicit
+        // local backend (a bare OS path), so they need no credential.
+        let cred: Option<CloudCredential> = if src_info.is_some() || dst_info.is_some() {
+            let cred_ref = job.credentials_ref.as_deref().unwrap_or("default");
+            Some(self.vault.resolve(cred_ref)?)
+        } else {
+            None
+        };
+
         if src_info.is_some() {
-            let _ = client
-                .configure_remote(&src_remote_name, cred.clone())
+            let c = cred.clone().expect("cred resolved when a cloud side exists");
+            client
+                .configure_remote(&src_remote_name, c)
                 .await
                 .map_err(|e| UniFlowError::Transport(e.to_string()))?;
         }
         if dst_info.is_some() {
-            let _ = client
-                .configure_remote(&dst_remote_name, cred)
+            let c = cred.clone().expect("cred resolved when a cloud side exists");
+            client
+                .configure_remote(&dst_remote_name, c)
                 .await
                 .map_err(|e| UniFlowError::Transport(e.to_string()))?;
         }
 
-        // Build remote paths (rclone style: remote:bucket/prefix)
-        let build_remote_path = |info: Option<(String, String, Option<String>)>, remote_name: &str| {
-            match info {
-                Some((provider, bucket, prefix)) => {
-                    let p = prefix.map(|pr| format!("{}/{}", bucket, pr)).unwrap_or(bucket);
-                    format!("{}:{}", remote_name, p)
-                }
-                None => "local".to_string(), // fallback, caller should have used local transport
-            }
+        // Build rclone-style paths: cloud → "remote:bucket/prefix"; local → the bare
+        // sandbox-resolved OS path (rclone's implicit local backend).
+        let build_cloud_path = |info: &(String, String, Option<String>), remote_name: &str| {
+            let (_provider, bucket, prefix) = info;
+            let p = match prefix {
+                Some(pr) => format!("{}/{}", bucket, pr),
+                None => bucket.clone(),
+            };
+            format!("{}:{}", remote_name, p)
         };
 
-        let src_remote_path = if src_info.is_some() {
-            build_remote_path(src_info, &src_remote_name)
-        } else {
-            // Local source - Rclone understands absolute paths directly for local
-            // For simplicity in this skeleton we assume the caller passed a path via the local remote
-            // or we could map Local Endpoint here.
-            job.source.inner().label() // will be improved
+        let src_remote_path = match &src_info {
+            Some(info) => build_cloud_path(info, &src_remote_name),
+            None => Self::local_path_string(job.source.inner())?,
         };
-
-        let dst_remote_path = if dst_info.is_some() {
-            build_remote_path(dst_info, &dst_remote_name)
-        } else {
-            job.destination.inner().label()
+        let dst_remote_path = match &dst_info {
+            Some(info) => build_cloud_path(info, &dst_remote_name),
+            None => Self::local_path_string(job.destination.inner())?,
         };
 
         // Perform the transfer

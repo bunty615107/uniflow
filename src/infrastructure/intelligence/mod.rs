@@ -11,10 +11,16 @@
 
 pub mod engine;
 pub mod hardware;
+pub mod offload;
 pub mod optimizer;
+pub mod planner;
 pub mod probes;
+pub mod profiler;
 
 pub use engine::DefaultIntelligenceEngine;
 pub use hardware::{HardwareDetector, HardwareRegistry};
+pub use offload::{select_offload, CpuOffload};
 pub use optimizer::DefaultOptimizer;
+pub use planner::CostModelPlanner;
 pub use probes::CustomNetworkProbe;
+pub use profiler::DefaultSystemProfiler;

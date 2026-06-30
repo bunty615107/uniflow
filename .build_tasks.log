@@ -1,0 +1,14 @@
+   Compiling iroh-quinn-proto v0.11.6
+   Compiling pkarr v2.3.1
+   Compiling quinn-proto v0.11.14
+   Compiling uniflowd v0.1.0 (D:\uniflow)
+   Compiling iroh-quinn v0.11.3
+   Compiling quinn v0.11.9
+   Compiling iroh-net v0.25.0
+   Compiling quic-rpc v0.12.1
+   Compiling iroh-gossip v0.25.0
+   Compiling iroh-blobs v0.25.0
+   Compiling iroh-docs v0.25.0
+   Compiling iroh v0.25.0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4m 53s
+=== BUILD_EXIT=0 ===

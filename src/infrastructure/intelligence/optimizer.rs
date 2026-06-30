@@ -5,9 +5,10 @@
 
 use crate::application::ports::{HardwareProfile, NetworkProbeResult, Optimizer, TuningDecision};
 use crate::domain::Job;
-use chrono::{DateTime, Utc};
+use chrono::{Timelike, Utc};
 use tracing::info;
 
+#[derive(Default)]
 pub struct DefaultOptimizer;
 
 impl DefaultOptimizer {
@@ -31,7 +32,7 @@ impl Optimizer for DefaultOptimizer {
                 threads = (threads as f64 * 1.5) as usize;
                 reasons.push("high bandwidth detected → larger chunks + more concurrency".to_string());
             } else if net.bandwidth_mbps < 100.0 {
-                chunk_size = 1 * 1024 * 1024;
+                chunk_size = 1024 * 1024;
                 compression = Some(6);
                 reasons.push("low bandwidth → smaller chunks + stronger compression".to_string());
             }

@@ -3,11 +3,11 @@
 
 use crate::application::ports::ContentHasher;
 use crate::domain::{BlockSignature, FileManifest, FileSignature};
-use crate::error::{Result, UniFlowError};
+use crate::error::Result;
 use blake3::Hasher;
 use rayon::prelude::*;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::path::Path;
 
 const DEFAULT_BLOCK_SIZE: u32 = 4096; // 4KiB blocks (tunable, same as many rsync configs)
@@ -50,7 +50,7 @@ impl ContentHasher for ParallelBlake3Hasher {
         let total_size = metadata.len();
         let block_size = if block_size == 0 { self.block_size } else { block_size };
 
-        let num_blocks = ((total_size + block_size as u64 - 1) / block_size as u64) as usize;
+        let num_blocks = total_size.div_ceil(block_size as u64) as usize;
 
         // Read the whole file (or use mmap for very large files in future)
         let mut data = Vec::with_capacity(total_size as usize);

@@ -39,6 +39,8 @@ iroh = { version = "0.25", default-features = false, features = [
     "discovery-local-network",  # LAN mDNS/UDP broadcast for air-gap
     "discovery-pkarr-dht",      # for peer discovery
 ] }
+# iroh-net: explicitly imported to access RelayMode configuration which is not re-exported by the main iroh crate
+iroh-net = { version = "0.25", default-features = false }
 quinn = "0.11"  # explicit for QUIC transport (used by iroh)
 
 # Module 05 Security (Section 13 approved) - PINNED + hardened (per subagent threat model + vuln reports)
@@ -47,7 +49,8 @@ rustls-pemfile = "=2.2.0"   # pinned; unmaintained in loose "2" (RUSTSEC-2025-01
 chacha20poly1305 = "0.10"
 aes-gcm = "=0.10.3"         # pinned for known issues
 zeroize = { version = "1", features = ["zeroize_derive"] }
-# rand for proper OsRng in encryption.rs (previously used undeclared rand::random)
+# rand for proper OsRng in encryption.rs (cryptographically secure nonce, Module 05).
+# (De-duplicated: this was previously declared twice in this file.)
 rand = { version = "0.8", features = ["std"] }
 # rand added (with note per task) for proper OsRng (cryptographically secure nonce) in encryption.rs.
 # (Module 05 security). Alternative lighter dep: rand_core = "0.6" (transitively available via aead).
@@ -55,9 +58,20 @@ rand = { version = "0.8", features = ["std"] }
 
 # For web application binding the Stitch UIs to backend
 axum = { version = "0.7", features = ["macros", "json", "tokio"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 tower-http = { version = "0.5", features = ["fs", "cors", "set-header", "limit", "trace"] }
 # tower required for RateLimitLayer (and test ServiceExt); rate limiting + middleware composition
 tower = { version = "0.4", features = ["limit", "util"] }
+
+[features]
+# GPU offload (Deliverable 2): OFF by default. When enabled, ComputeOffload may route
+# hashing/compression to a GPU backend; the CPU fallback is always compiled in regardless.
+default = []
+gpu = ["wgpu"]
+
+[dependencies.wgpu]
+version = "0.20"
+optional = true
 
 [build-dependencies]
 tonic-build = "0.12"
@@ -67,8 +81,18 @@ tonic-build = "0.12"
 # tower now provided by [dependencies] (with limit+util); keep only test-specific if needed
 http-body-util = "0.1"
 mime = "0.3"
+# criterion: benchmark harness (Deliverable "PROVE IT"). Dev-only.
+criterion = { version = "0.5", features = ["html_reports"] }
+# proptest: for property-based round-trip testing of the parallel transfer core (JULES-08)
+proptest = "1.4"
+
+[[bench]]
+name = "transfer_bench"
+harness = false
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
-strip = true
+opt-level = 3
+panic = "abort"
+strip = "debuginfo"

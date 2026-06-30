@@ -7,14 +7,16 @@
 //! In a fuller system this could also own config, multiple transports (via router),
 //! background scheduling, API servers (gRPC/WS), etc.
 
+use crate::application::ports::IntelligenceEngine; // trait in scope for profile_and_tune()
 use crate::application::services::JobService;
+use crate::config::UniFlowConfig;
 use crate::domain::{Job, JobId};
 use crate::error::Result;
 use std::sync::Arc;
 
 use crate::infrastructure::{
-    DefaultIntelligenceEngine, EnvCredentialVault, InMemoryJobRepository, IrohP2PTransport,
-    LocalDeltaTransport, RcloneCloudTransport, TransportRouter,
+    DefaultIntelligenceEngine, InMemoryJobRepository, IrohP2PTransport,
+    LocalDeltaTransport, RcloneCloudTransport, SledJobRepository, TransportRouter,
 };
 use crate::infrastructure::cloud::RcloneBridgeClient;
 
@@ -26,17 +28,37 @@ pub struct Daemon {
 
 impl Daemon {
     /// Create a new daemon with sensible defaults (Local delta + Cloud via Rclone bridge).
-    /// This is the composition root.
+    /// This is the composition root. Accepts a `UniFlowConfig` for all path/env configuration.
     ///
     /// For full cloud support you must have the Rclone gRPC bridge running (see docs/module01-...md).
     /// Credentials are resolved from environment (UNIFLOW_* vars) via EnvCredentialVault.
-    pub async fn new() -> Result<Self> {
-        let snapshot_path = std::path::PathBuf::from(r"D:\uniflow\uniflow_jobs.snapshot.json");
+    pub async fn new(config: &UniFlowConfig) -> Result<Self> {
+        let snapshot_path = config.snapshot_path();
 
-        let repo = InMemoryJobRepository::new().with_snapshot(snapshot_path);
-        // Load prior snapshot if present (skeleton; adds basic integrity load path)
-        let _ = repo.load_snapshot().await;
-        let repo: Arc<dyn crate::application::ports::JobRepository> = Arc::new(repo);
+        // Persistence backend selection (JULES-11): durable sled store is opt-in via
+        // `UNIFLOW_SLED_PATH`; the in-memory repo (with JSON snapshot) stays the default.
+        let repo: Arc<dyn crate::application::ports::JobRepository> =
+            match &config.sled_path {
+                Some(sled_path) if !sled_path.is_empty() => {
+                    let sled_repo = SledJobRepository::open(sled_path)?;
+                    // One-time, idempotent import from the legacy JSON snapshot.
+                    match sled_repo.migrate_from_snapshot(&snapshot_path).await {
+                        Ok(n) if n > 0 => {
+                            tracing::info!(imported = n, "migrated jobs from snapshot into sled store")
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("snapshot migration skipped: {}", e),
+                    }
+                    tracing::info!(path = %sled_path, "using durable sled JobRepository");
+                    Arc::new(sled_repo)
+                }
+                _ => {
+                    let mem = InMemoryJobRepository::new().with_snapshot(snapshot_path);
+                    // Load prior snapshot if present (basic integrity-checked load path).
+                    let _ = mem.load_snapshot().await;
+                    Arc::new(mem)
+                }
+            };
 
         let local_transport = Arc::new(LocalDeltaTransport::new());
 
@@ -51,41 +73,37 @@ impl Daemon {
         };
 
         // Attempt to connect to Rclone bridge for cloud. Fallback to local if not running.
-        let cloud_transport = match RcloneBridgeClient::connect("http://127.0.0.1:50051").await {
-            Ok(client) => {
-                let vault: Arc<dyn crate::application::ports::CredentialVault> =
-                    Arc::new(crate::infrastructure::EnvCredentialVault::new());
-                Arc::new(RcloneCloudTransport::new(client, vault))
-            }
-            Err(_) => local_transport.clone(),
-        };
+        // Typed as `dyn Transport` so the two arms (different concrete transports) unify.
+        let vault: Arc<dyn crate::application::ports::CredentialVault> = Arc::new(crate::infrastructure::EnvCredentialVault::new());
+        let cloud_transport: Arc<dyn crate::application::ports::Transport> =
+            match RcloneBridgeClient::connect("http://127.0.0.1:50051").await {
+                Ok(client) => {
+                    Arc::new(RcloneCloudTransport::new(client, vault.clone()))
+                }
+                Err(_) => local_transport.clone(),
+            };
 
         // Module 04: Intelligence & Optimiser (pluggable profiling + auto-tuning)
         let intelligence: Arc<dyn crate::application::ports::IntelligenceEngine> =
             Arc::new(DefaultIntelligenceEngine::new());
 
         // Module 05: Security components (baked into daemon)
-        let rbac = crate::infrastructure::RbacEnforcer::new();
+        let _rbac = crate::infrastructure::RbacEnforcer::new();
         // Replaced NoopMfa with DemoMfa (logs warning, demo only, documented in access_control.rs)
-        let mfa: Arc<dyn crate::infrastructure::MfaHook> = Arc::new(crate::infrastructure::security::access_control::DemoMfa);
+        let _mfa: Arc<dyn crate::infrastructure::MfaHook> = Arc::new(crate::infrastructure::security::access_control::DemoMfa);
         // DEMO FLAG: dummy encryption placeholder removed from active path (was [0u8;32]).
         // Real encryption keys come exclusively from CredentialVault + KDF per-job (see JobService worker + encryption.rs).
         // If needed for tests: use env-derived or ClientSideEncryption::new with marked DEMO key only.
         let _encryption = (); // previously: ClientSideEncryption::new([0u8;32]) -- flagged/removed for security hygiene
 
-        let router = TransportRouter::new(
+        let router = Arc::new(TransportRouter::new(
             local_transport.clone(),
             cloud_transport,
             p2p_transport,
             Some(intelligence.clone()),
-        );
+        ));
 
-        // Router + intel are constructed (per design) but selection is not yet hot-wired into JobService (see transport_router.rs).
-        // TODO (optim + security): pass `router` (or selector) to JobService so select() + intel.profile_and_tune run automatically per job (prevents bypass + enables correct transport choice).
-        // Current: JobService always uses plain local_transport (as before).
-        let transport: Arc<dyn crate::application::ports::Transport> = local_transport;
-
-        let service = JobService::new(repo, transport).await?;
+        let service = JobService::new(repo, router, vault).await?;
 
         Ok(Self { service })
     }

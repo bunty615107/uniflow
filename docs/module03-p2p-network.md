@@ -243,3 +243,36 @@ This module completes direct P2P for the mobile/PC use cases described in the bl
 ---
 
 **Implementation will now proceed in code** (new `infrastructure/p2p/` module, crate updates, router enhancements, mobile stubs, doc links). See the todo list for tracked steps. The design document above serves as the required output for architecture, NAT strategy, and mobile daemon design.
+
+---
+
+## Status update: the P2P transfer is now a real, integrity-checked protocol
+
+The earlier `IrohP2PTransport::execute` was a placeholder that fabricated a "synthetic"
+transfer (and reported success) whenever it could not connect. That has been replaced by
+a genuine implementation:
+
+- **Real session protocol** (`infrastructure/p2p/protocol.rs`) speaking the exact
+  self-describing wire frame from `docs/client-contract.md`
+  (`infrastructure/transfer/frame.rs`): `offset | plain_len | wire_len | flags | [nonce] |
+  blake3 | payload`. Both peers run the identical code; it is generic over Tokio's async
+  read/write traits, so it is driven over an in-memory `duplex` in CI **and** over real
+  iroh/QUIC in production.
+- **Honest peer resolution** — a `Device` endpoint's `device_id` is parsed as the hex of
+  the peer's 32-byte node public key and validated via `NodeId::from_bytes`; a malformed
+  id is **rejected**, never turned into a fabricated peer.
+- **Roles from the job** — `Local → Device` PUSHes the local file; `Device → Local` PULLs
+  it. The op byte (`OP_PUSH`/`OP_PULL`) lets either side act as initiator or acceptor.
+- **Guarantees** — per-chunk **and** end-to-end BLAKE3 integrity, **resume** from the
+  highest contiguous offset (checkpoint sidecar), **atomic publish** (temp → rename), and
+  optional end-to-end **zstd + AEAD** (AES-GCM/ChaCha20) when a shared key
+  (`UNIFLOW_P2P_PSK`) is configured — otherwise it degrades to integrity-only with a
+  logged, auditable warning (graceful degradation, never a silent or fake success).
+- **Tests** — deterministic CI tests over an in-memory duplex cover the full pipeline
+  (plain / compressed+encrypted / empty / AES / missing-key rejection); an `--ignored`
+  test (`loopback_real_quic_file_transfer_is_byte_exact`) moves a real file over real QUIC
+  between two in-process endpoints and asserts byte-exact, atomically-published delivery.
+
+A persistent daemon **accept loop** (so an idle node can receive inbound P2P jobs) reuses
+the same `run_receiver`/`run_sender` primitives and remains the one explicitly-deferred
+wiring step.

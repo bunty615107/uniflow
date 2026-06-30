@@ -7,5 +7,6 @@
 //! is handled separately via FFI (flutter_rust_bridge) and native platform code.
 
 pub mod iroh_p2p_transport;
+pub mod protocol;
 
-pub use iroh_p2p_transport::IrohP2PTransport;
+pub use iroh_p2p_transport::{IrohP2PTransport, RelayMode};

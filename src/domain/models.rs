@@ -99,7 +99,7 @@ impl Destination {
     }
 }
 
-/// === Phase 1 Delta Transfer Types (Module 02 / Section 13) ===
+// === Phase 1 Delta Transfer Types (Module 02 / Section 13) ===
 
 /// Rolling weak checksum + strong BLAKE3 for a block (librsync + blake3).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -188,7 +188,7 @@ pub struct ProfilingResult {
     pub timestamp: DateTime<Utc>,
 }
 
-/// === Module 03: Adaptive P2P Network (Section 13 / Mobile modes) ===
+// === Module 03: Adaptive P2P Network (Section 13 / Mobile modes) ===
 
 /// Unique identifier for a P2P peer (from iroh NodeId or libp2p PeerId).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -254,6 +254,7 @@ pub struct Policy {
     pub rbac_role: Option<String>,      // e.g. "admin", "operator", "auditor"
     pub mfa_required: bool,
     pub audit_level: String,            // "none" | "standard" | "tamper_evident"
+    pub max_bps: Option<u64>,           // Optional bandwidth cap (JULES-10)
 }
 
 impl Default for Policy {
@@ -268,6 +269,7 @@ impl Default for Policy {
             rbac_role: None,
             mfa_required: false,
             audit_level: "standard".to_string(),
+            max_bps: None,
         }
     }
 }
@@ -288,7 +290,8 @@ pub struct Filters {
 }
 
 /// Job status machine.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Note: only `PartialEq` (not `Eq`) — `Running.progress` is `f32`, which is not `Eq`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum JobStatus {
     Pending,
     Queued,
@@ -334,6 +337,11 @@ pub struct Job {
     pub updated_at: DateTime<Utc>,
     pub checkpoint: Option<u64>,
     pub label: Option<String>,
+    /// The near-optimal `TransferPlan` the intelligence layer tuned this job to.
+    /// Populated by the Planner before transfer; persisted for auditability.
+    /// `#[serde(default)]` keeps older serialized jobs forward-compatible.
+    #[serde(default)]
+    pub plan: Option<crate::domain::plan::TransferPlan>,
 }
 
 impl Job {
@@ -353,7 +361,15 @@ impl Job {
             updated_at: now,
             checkpoint: None,
             label: None,
+            plan: None,
         }
+    }
+
+    /// Attach the tuned transfer plan (Planner output) to the job.
+    pub fn with_plan(mut self, plan: crate::domain::plan::TransferPlan) -> Self {
+        self.plan = Some(plan);
+        self.updated_at = Utc::now();
+        self
     }
 
     pub fn with_policy(mut self, policy: Policy) -> Self {
@@ -386,18 +402,18 @@ impl Job {
 
     fn can_transition(from: &JobStatus, to: &JobStatus) -> bool {
         use JobStatus::*;
-        match (from, to) {
-            (Pending, Queued) => true,
-            (Queued, Running { .. }) => true,
-            (Running { .. }, Running { .. }) => true,
-            (Running { .. }, Completed { .. }) => true,
-            (Running { .. }, Failed { .. }) => true,
-            (Running { .. }, Cancelled) => true,
-            (Running { .. }, Paused) => true,
-            (Paused, Running { .. }) => true,
-            (Paused, Cancelled) => true,
-            (_, Cancelled) => true,
-            _ => false,
-        }
+        matches!(
+            (from, to),
+            (Pending, Queued)
+                | (Queued, Running { .. })
+                | (Running { .. }, Running { .. })
+                | (Running { .. }, Completed { .. })
+                | (Running { .. }, Failed { .. })
+                | (Running { .. }, Cancelled)
+                | (Running { .. }, Paused)
+                | (Paused, Running { .. })
+                | (Paused, Cancelled)
+                | (_, Cancelled)
+        )
     }
 }

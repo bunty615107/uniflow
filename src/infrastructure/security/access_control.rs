@@ -5,7 +5,7 @@
 use crate::error::{Result, UniFlowError};
 use tracing::{info, warn};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct RbacEnforcer {
     // In real: roles from config or external IdP (LDAP/AD/SSO per Section 9).
 }
@@ -24,7 +24,10 @@ impl RbacEnforcer {
             (Some("auditor"), "list" | "get") if !job_sensitivity => Ok(()),
             _ => {
                 info!(role = ?role, action, job_sensitivity, "rbac_denied");
-                Err(UniFlowError::Config("RBAC: insufficient privileges".into()))
+                Err(UniFlowError::NotAuthorized(format!(
+                    "role {:?} cannot perform '{}' (sensitive={})",
+                    role, action, job_sensitivity
+                )))
             }
         }
     }

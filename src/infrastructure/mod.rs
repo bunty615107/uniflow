@@ -16,10 +16,12 @@ pub use cloud::{RcloneBridgeClient, RcloneCloudTransport};
 pub use credentials::EnvCredentialVault;
 pub use delta::ParallelBlake3Hasher;
 pub use mobile::MobileP2PBackground;
-pub use intelligence::DefaultIntelligenceEngine;
+pub use intelligence::{
+    CostModelPlanner, CpuOffload, DefaultIntelligenceEngine, DefaultSystemProfiler,
+};
 pub use p2p::IrohP2PTransport;
-pub use persistence::InMemoryJobRepository;
+pub use persistence::{InMemoryJobRepository, SledJobRepository};
 pub use security::{AuditEvent, ClientSideEncryption, MfaHook, RbacEnforcer, RustlsConfig, TamperEvidentAuditLogger};
-pub use transfer::LocalDeltaTransport;
-pub use transport::NoopTransport;
+pub use transfer::{LocalDeltaTransport, ParallelTransport};
+pub use transport::{NoopTransport, NoopSelector};
 pub use transport_router::TransportRouter;

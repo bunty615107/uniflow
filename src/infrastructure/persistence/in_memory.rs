@@ -27,14 +27,26 @@ impl InMemoryJobRepository {
         self
     }
 
-    /// Basic load support (skeleton per subagent recommendations for integrity).
-    /// In production: add atomic writes, size/schema validation, optional BLAKE3/MAC/signature, and call on construction.
     pub async fn load_snapshot(&self) -> Result<()> {
         if let Some(path) = &self.snapshot_path {
             if path.exists() {
                 let data = tokio::fs::read(path).await?;
-                // TODO (security): verify size, blake3 root or HMAC before deserial; reject malformed
-                if let Ok(list) = serde_json::from_slice::<Vec<Job>>(&data) {
+                
+                // JULES-06: Integrity verification
+                if data.len() < 32 {
+                    tracing::warn!("Snapshot file too small to contain integrity tag, skipping load");
+                    return Ok(());
+                }
+                
+                let (payload, expected_tag) = data.split_at(data.len() - 32);
+                let computed_tag = blake3::hash(payload);
+                
+                if computed_tag.as_bytes() != expected_tag {
+                    tracing::warn!("Snapshot integrity verification failed! File is tampered or corrupt. Skipping load.");
+                    return Ok(());
+                }
+                
+                if let Ok(list) = serde_json::from_slice::<Vec<Job>>(payload) {
                     let mut map = self.jobs.lock().await;
                     for j in list {
                         // Basic post-deser validation stub
@@ -51,8 +63,16 @@ impl InMemoryJobRepository {
         if let Some(path) = &self.snapshot_path {
             let jobs = self.jobs.lock().await;
             let list: Vec<&Job> = jobs.values().collect();
-            let json = serde_json::to_vec_pretty(&list)?;
-            tokio::fs::write(path, &json).await?;
+            let mut data = serde_json::to_vec_pretty(&list)?;
+            
+            // JULES-06: Append BLAKE3 integrity tag
+            let tag = blake3::hash(&data);
+            data.extend_from_slice(tag.as_bytes());
+            
+            // Atomic write
+            let tmp_path = path.with_extension("tmp");
+            tokio::fs::write(&tmp_path, &data).await?;
+            tokio::fs::rename(&tmp_path, path).await?;
         }
         Ok(())
     }
@@ -71,7 +91,7 @@ impl JobRepository for InMemoryJobRepository {
         let map = self.jobs.lock().await;
         map.get(&id)
             .cloned()
-            .ok_or_else(|| crate::error::UniFlowError::JobNotFound(id))
+            .ok_or(crate::error::UniFlowError::JobNotFound(id))
     }
 
     async fn list(&self) -> Result<Vec<Job>> {

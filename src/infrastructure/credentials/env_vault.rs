@@ -9,7 +9,7 @@
 //! basic — replace with a real vault for production.
 
 use crate::application::ports::{CloudCredential, CredentialVault};
-use crate::error::{Result, UniFlowError};
+use crate::error::Result;
 use std::collections::HashMap;
 use std::env;
 
@@ -25,11 +25,12 @@ impl EnvCredentialVault {
         for (key, value) in env::vars() {
             if key.starts_with(prefix) {
                 // Convert UNIFLOW_S3_ACCESS_KEY_ID → access_key_id
+                // (rclone often uses snake_case keys; the stripped suffix is already
+                // underscore-separated, so a lowercase is all that's needed.)
                 let rclone_key = key
                     .strip_prefix(prefix)
                     .unwrap_or(&key)
-                    .to_lowercase()
-                    .replace('_', "_"); // rclone often uses snake_case or specific names
+                    .to_lowercase();
                 config.insert(rclone_key, value);
             }
         }
@@ -50,7 +51,7 @@ impl CredentialVault for EnvCredentialVault {
         let provider = reference.split(':').next().unwrap_or(reference).to_lowercase();
         let env_prefix = format!("UNIFLOW_{}_", provider.to_uppercase());
 
-        let mut config = self.load_from_env(&env_prefix);
+        let config = self.load_from_env(&env_prefix);
 
         if config.is_empty() {
             // Fallback: try to use the reference directly as a named remote (rclone config style)

@@ -167,3 +167,32 @@ This module makes UniFlow "smart" while remaining pluggable and auditable, direc
 ---
 
 **Next steps in code**: ports extension, intelligence module creation, integration, demo. All decisions will be logged.
+---
+
+## Update: Real Profiler + Cost-Model Planner (self-optimizing engine)
+
+The Module 04 skeleton (placeholder `HardwareRegistry`, fake `CustomNetworkProbe`,
+rule-based `DefaultOptimizer`) is now backed by a **real, profile-first** layer.
+The original traits remain for backward compatibility; the new layer adds:
+
+- **`SystemProfiler`** (`application::ports`) → `DefaultSystemProfiler`
+  (`infrastructure::intelligence::profiler`): genuine cross-platform detection of
+  CPU/SIMD/AES, RAM, storage class, GPU, and OS/FS facts, plus a measured network
+  link, **cached per endpoint pair**. Replaces the hard-coded `HardwareProfile`
+  values (RAM was `8.0`, features assumed `avx2`).
+- **`Planner`** (`application::ports`) → `CostModelPlanner`
+  (`infrastructure::intelligence::planner`): an explicit, documented cost model that
+  emits a `TransferPlan` (chunk size, stream count, in-flight depth, worker threads,
+  compression codec+level, encryption codec, GPU on/off, memory budget) with a
+  required `explanation` and the model's own `cost_estimated_mbps` / `cost_bottleneck`.
+- **`ComputeOffload`** (`application::ports`) → `CpuOffload` (always) + feature-gated
+  `GpuOffload` (`infrastructure::intelligence::offload`): the offload seam with a CPU
+  fallback that is always compiled in.
+
+`DefaultIntelligenceEngine::profile_and_tune` now also runs the profiler+planner and
+attaches the resulting `TransferPlan` to `job.plan`, which `TransportRouter` uses to
+choose the transport and which `ParallelTransport` consumes to configure the run.
+
+See `docs/architecture.md` → *Self-Optimizing Migration Engine* for the full
+profiler heuristics, planner cost model, and AIMD adaptive control loop, and
+`docs/client-contract.md` for the transport boundary a mobile client drives.

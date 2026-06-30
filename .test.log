@@ -1,0 +1,29 @@
+rustc-LLVM ERROR: out of memory
+Allocation failed
+error: could not compile `uniflowd` (lib test)
+
+Caused by:
+  process didn't exit successfully: `C:\Users\abhis\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name uniflow --edition=2021 src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --emit=dep-info,link -C embed-bitcode=no -C debuginfo=2 --test --cfg "feature=\"default\"" --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values(\"default\", \"gpu\", \"wgpu\"))" -C metadata=da3fbc0268f15ee3 -C extra-filename=-dbde94e8eb61e9dd --out-dir D:\uniflow\target\debug\deps -C incremental=D:\uniflow\target\debug\incremental -L dependency=D:\uniflow\target\debug\deps --extern aes_gcm=D:\uniflow\target\debug\deps\libaes_gcm-247cb4ef7ea976a9.rlib --extern anyhow=D:\uniflow\target\debug\deps\libanyhow-c6babb0c09bad520.rlib --extern async_trait=D:\uniflow\target\debug\deps\async_trait-412c42a38bb40857.dll --extern axum=D:\uniflow\target\debug\deps\libaxum-70fb4a34dc1af121.rlib --extern axum_server=D:\uniflow\target\debug\deps\libaxum_server-20f10f402b2a6faa.rlib --extern blake3=D:\uniflow\target\debug\deps\libblake3-75b71db1c508d329.rlib --extern chacha20poly1305=D:\uniflow\target\debug\deps\libchacha20poly1305-c996ee18c5024b7f.rlib --extern chrono=D:\uniflow\target\debug\deps\libchrono-e7c2840198cd6493.rlib --extern criterion=D:\uniflow\target\debug\deps\libcriterion-cb18d4edd7b5992c.rlib --extern http_body_util=D:\uniflow\target\debug\deps\libhttp_body_util-f80c939550779979.rlib --extern iroh=D:\uniflow\target\debug\deps\libiroh-0aac268eedf02731.rlib --extern iroh_net=D:\uniflow\target\debug\deps\libiroh_net-4ba7710b128ba5f2.rlib --extern memmap2=D:\uniflow\target\debug\deps\libmemmap2-40f88f1bff0005b4.rlib --extern mime=D:\uniflow\target\debug\deps\libmime-73aaa303d72938a8.rlib --extern proptest=D:\uniflow\target\debug\deps\libproptest-d693f1a1fefc1480.rlib --extern prost=D:\uniflow\target\debug\deps\libprost-79a54f46f1a102ad.rlib --extern quinn=D:\uniflow\target\debug\deps\libquinn-98791b77498f4e1b.rlib --extern rand=D:\uniflow\target\debug\deps\librand-a21a0fda29a8d8b8.rlib --extern rayon=D:\uniflow\target\debug\deps\librayon-87f0c0cf20698f67.rlib --extern rustls=D:\uniflow\target\debug\deps\librustls-bb3aeddc3403869e.rlib --extern rustls_pemfile=D:\uniflow\target\debug\deps\librustls_pemfile-e7f12415f4699753.rlib --extern serde=D:\uniflow\target\debug\deps\libserde-a71c4cc074ebca6a.rlib --extern serde_json=D:\uniflow\target\debug\deps\libserde_json-8975b5d71378ba03.rlib --extern sled=D:\uniflow\target\debug\deps\libsled-4cafa2f008fee0b4.rlib --extern sysinfo=D:\uniflow\target\debug\deps\libsysinfo-22b8c1fcae4364ff.rlib --extern thiserror=D:\uniflow\target\debug\deps\libthiserror-31f2c498b723ac33.rlib --extern tokio=D:\uniflow\target\debug\deps\libtokio-621176d8de1f0d0c.rlib --extern tokio_util=D:\uniflow\target\debug\deps\libtokio_util-2879552d6a76067e.rlib --extern tonic=D:\uniflow\target\debug\deps\libtonic-568ae44e1d7a5ff5.rlib --extern tower=D:\uniflow\target\debug\deps\libtower-596ac09e7a3f2f76.rlib --extern tower_http=D:\uniflow\target\debug\deps\libtower_http-9f99f831357e5a8d.rlib --extern tracing=D:\uniflow\target\debug\deps\libtracing-56e55848ae1f4c50.rlib --extern tracing_subscriber=D:\uniflow\target\debug\deps\libtracing_subscriber-3525334f9ad9f2cf.rlib --extern uuid=D:\uniflow\target\debug\deps\libuuid-beb9854529e0b32f.rlib --extern zeroize=D:\uniflow\target\debug\deps\libzeroize-ca5d277690aa3b79.rlib --extern zstd=D:\uniflow\target\debug\deps\libzstd-d900a5f1d08b93a6.rlib -L native=D:\uniflow\target\debug\build\aws-lc-sys-80f09f5725f7681d\out -L native=D:\uniflow\target\debug\build\ring-dcca6709d1fc8953\out -L native=D:\uniflow\target\debug\build\blake3-2091cc401ed20d8b\out -L native=D:\uniflow\target\debug\build\blake3-2091cc401ed20d8b\out -L native=D:\uniflow\target\debug\build\iroh-blake3-9e1d94dcf5956f38\out -L native=D:\uniflow\target\debug\build\iroh-blake3-9e1d94dcf5956f38\out -L native=D:\uniflow\target\debug\build\zstd-sys-1ec74040ebd32e68\out -L native=C:\Users\abhis\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows_x86_64_msvc-0.52.6\lib -L native=C:\Users\abhis\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows_x86_64_msvc-0.48.5\lib -L native=C:\Users\abhis\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows_x86_64_msvc-0.53.1\lib` (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+error[E0463]: can't find crate for `uniflow`
+  --> src\main.rs:12:5
+   |
+12 | use uniflow::domain::{Destination, Endpoint, Job, Source, TransferMode};
+   |     ^^^^^^^ can't find crate
+
+For more information about this error, try `rustc --explain E0463`.
+error: could not compile `uniflowd` (bin "uniflowd" test) due to 1 previous error
+error[E0463]: can't find crate for `uniflow`
+ --> tests\parallel_transfer.rs:9:5
+  |
+9 | use uniflow::{
+  |     ^^^^^^^ can't find crate
+
+error: could not compile `uniflowd` (test "parallel_transfer") due to 1 previous error
+error: crate `iroh_blobs` required to be available in rlib format, but was not found in this form
+
+error: crate `iroh_metrics` required to be available in rlib format, but was not found in this form
+
+error: crate `erased_set` required to be available in rlib format, but was not found in this form
+
+error: could not compile `uniflowd` (bin "uniflowd") due to 3 previous errors
+=== TEST_EXIT=101 ===
